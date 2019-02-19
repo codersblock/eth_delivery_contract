@@ -1,0 +1,141 @@
+pragma solidity ^0.5.1;
+contract Delivery {
+    
+    ///// contract state variables /////
+    
+    address seller;
+    address buyer;
+    address delivery_agent;
+    
+    uint ask_price;
+    uint delivery_fee;
+    
+    enum State { Available, Sold, Shipped, Delivered, Cancelled }
+    State public state;
+    
+    mapping (address => uint) refunds;
+    
+    ///// contract constructor /////
+    
+    constructor(uint _ask_price) public {
+        ask_price = _ask_price;
+        state = State.Available;
+    }
+    
+    ///// public contract functions /////
+    
+    /// buy
+    ///  accepts etherium for the sale of this item.  Will store for withdrawal if amount is insufficient, or if another buyer was already found.
+    function buy() public payable {
+        refunds[msg.sender] += msg.value;
+        
+        if ((msg.value >= ask_price) && (state == State.Available)) {
+            buyer = msg.sender;
+            state = State.Sold;
+        }
+    }
+    
+    /// cancel
+    ///  allows the seller to cancel the sale any time before the item has shipped
+    function cancel() public seller_only unshipped {
+        state = State.Cancelled;
+    }
+    
+    /// add_delivery_agent
+    ///  allows the buyer or seller to specify a third ethereum address with authority to confirm shipment delivery.
+    function add_delivery_agent(address _delivery_agent, uint _delivery_fee) public seller_or_buyer_only unshipped {
+        delivery_fee = _delivery_fee;
+        delivery_agent = _delivery_agent;
+        state = State.Shipped;
+    }
+    
+    /// confirm_delivery
+    ///  called by the delivery agent to confirm delivery of the item
+    function confirm_delivery() public delivery_agent_only undelivered {
+        state = State.Delivered;
+    }
+    
+    /// returned_to_sender
+    ///  called by the delivery agent to indicate that the item was unable to be delivered, and was returned to the seller
+    function returned_to_sender() public delivery_agent_only undelivered {
+        state = State.Cancelled;
+    }
+    
+    /// received
+    ///  allows the buyer to specify that they have received the item.  This has the same effect on the state of the contract as confirm_delivery() function, so 
+    ///  is optional in cases where a delivery agent has already specified delivery.
+    function received() public buyer_only {
+        state = State.Delivered;
+    }
+    
+    /// withdraw 
+    ///  allows seller to withdraw their funds once item delivery is confirmed.
+    ///  in contract terms, that is while (state == Delivered), which is any point after the delivery agent has called the delivered() function
+    function withdraw() public seller_only delivered {
+        refunds[buyer] -= ask_price;
+        msg.sender.transfer(ask_price);
+    }
+    
+    /// refund
+    ///  allows buyers or rejected buyers to withdraw their funds.
+    ///  the selected buyer will only be able to get a full refund if the contract state is still undelivered (state == Sold), or if the contract has been cancelled (state == Cancelled)
+    function refund() public {
+        uint refund_amount = refunds[msg.sender];
+        if (msg.sender == buyer) {
+            if (state != State.Sold && state != State.Cancelled) {
+                refund_amount -= ask_price;
+            }
+
+            if (state == State.Sold) {
+                state = State.Available;
+            }
+        }
+
+        refunds[msg.sender] -= refund_amount;
+        msg.sender.transfer(refund_amount);
+    }
+
+    ///// function modifiers /////
+
+///state checks
+    modifier available() {
+        require (state == State.Available, "This item is no longer available for purchase.");
+        _;
+    }
+
+    modifier unshipped() {
+        require((state == State.Available) || (state == State.Sold), "This item has already shipped.");
+        _;
+    }
+
+    modifier undelivered() {
+        require(state == State.Shipped);
+        _;
+    }
+
+    modifier delivered() {
+        require(state == State.Delivered);
+        _;
+    }
+
+///msg.sender checks
+    modifier seller_only() {
+        require(msg.sender == seller, "This function can only be called by the seller.");
+        _;
+    }
+
+    modifier buyer_only() {
+        require(msg.sender == buyer, "This function can only be called by the buyer.");
+        _;
+    }
+
+    modifier seller_or_buyer_only() {
+        require((msg.sender == buyer) || (msg.sender == seller), "This function may only be called buy the seller or the buyer.");
+        _;
+    }
+
+    modifier delivery_agent_only() {
+        require(msg.sender == delivery_agent, "This function can only be called by the delivery agent.");
+        _;        
+    }
+}
